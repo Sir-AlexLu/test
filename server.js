@@ -1,81 +1,117 @@
-const express = require("express");
-const crypto = require("crypto");
-const bodyParser = require("body-parser");
+const express = require('express');
+const cors = require('cors');
+const crypto = require('crypto');
 
 const app = express();
-app.use(bodyParser.json());
+const PORT = process.env.PORT || 3000;
 
-let storedServerHash = null;
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static('public'));
 
-// Helper functions
-function calculateSHA256_String(seed) {
-  return crypto.createHash("sha256").update(seed).digest("hex");
+// Helper function to hash data with specified algorithm
+function hashData(data, algorithm) {
+  return crypto.createHash(algorithm).update(data).digest('hex');
 }
 
-function calculateSHA256_HexBuffer(seed) {
-  return crypto.createHash("sha256").update(Buffer.from(seed, "hex")).digest("hex");
+// Function to simulate game outcome based on seeds
+function simulateGameOutcome(clientSeed, serverSeed, nonce = 0) {
+  // Combine seeds and nonce
+  const combinedSeed = `${clientSeed}:${serverSeed}:${nonce}`;
+  
+  // Generate SHA512 hash
+  const sha512Hash = hashData(combinedSeed, 'sha512');
+  
+  // Convert to decimal (take first 8 characters of hash and convert to decimal)
+  const hexSubstring = sha512Hash.substring(0, 8);
+  const decimalValue = parseInt(hexSubstring, 16);
+  
+  // Calculate result (e.g., for a game with 100 possible outcomes)
+  const result = decimalValue % 100;
+  
+  return {
+    combinedSeed,
+    sha512Hash,
+    hexSubstring,
+    decimalValue,
+    result
+  };
 }
 
-// Commit endpoint (before game)
-app.post("/commit", (req, res) => {
-  const { serverHash } = req.body;
-  storedServerHash = serverHash;
-  res.json({ message: "✅ Server hash committed successfully", serverHash });
+// API endpoint to verify game fairness
+app.post('/verify', (req, res) => {
+  try {
+    const { clientSeed, serverSeed, serverHash, nonce = 0 } = req.body;
+    
+    if (!clientSeed || !serverSeed || !serverHash) {
+      return res.status(400).json({ 
+        error: 'Missing required parameters: clientSeed, serverSeed, serverHash' 
+      });
+    }
+    
+    // Verify server seed matches server hash
+    const computedServerHash = hashData(serverSeed, 'sha256');
+    const isHashValid = computedServerHash === serverHash;
+    
+    // Simulate game outcome
+    const gameOutcome = simulateGameOutcome(clientSeed, serverSeed, nonce);
+    
+    // Return verification results
+    res.json({
+      isHashValid,
+      serverHash: {
+        provided: serverHash,
+        computed: computedServerHash
+      },
+      gameOutcome,
+      fair: isHashValid
+    });
+  } catch (error) {
+    console.error('Verification error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
-// Verify endpoint (after game)
-app.post("/verify-result", (req, res) => {
-  if (!storedServerHash) {
-    return res.status(400).json({ error: "❌ No committed server hash found" });
-  }
+// API endpoint to generate a new server seed and hash (for testing)
+app.get('/generate-seed', (req, res) => {
+  const serverSeed = crypto.randomBytes(32).toString('hex');
+  const serverHash = hashData(serverSeed, 'sha256');
+  
+  res.json({
+    serverSeed,
+    serverHash
+  });
+});
 
-  const { serverSeed } = req.body;
-
-  // Calculate both ways
-  let calculatedString = null;
-  let calculatedHexBuffer = null;
-
+// API endpoint to simulate multiple game outcomes
+app.post('/simulate-multiple', (req, res) => {
   try {
-    calculatedString = calculateSHA256_String(serverSeed);
-  } catch (e) {
-    calculatedString = "⚠️ Error computing string hash";
+    const { clientSeed, serverSeed, count = 10 } = req.body;
+    
+    if (!clientSeed || !serverSeed) {
+      return res.status(400).json({ 
+        error: 'Missing required parameters: clientSeed, serverSeed' 
+      });
+    }
+    
+    const results = [];
+    for (let i = 0; i < count; i++) {
+      results.push(simulateGameOutcome(clientSeed, serverSeed, i));
+    }
+    
+    res.json({
+      clientSeed,
+      serverSeed,
+      results
+    });
+  } catch (error) {
+    console.error('Simulation error:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
-
-  try {
-    calculatedHexBuffer = calculateSHA256_HexBuffer(serverSeed);
-  } catch (e) {
-    calculatedHexBuffer = "⚠️ Error computing hex-buffer hash";
-  }
-
-  // Check which one matches
-  let verificationPassed = false;
-  let matchedType = null;
-
-  if (calculatedString === storedServerHash) {
-    verificationPassed = true;
-    matchedType = "string";
-  } else if (calculatedHexBuffer === storedServerHash) {
-    verificationPassed = true;
-    matchedType = "hex-buffer";
-  }
-
-  // Build response
-  const result = {
-    verificationPassed,
-    expectedHash: storedServerHash,
-    calculatedHashString: calculatedString,
-    calculatedHashHexBuffer: calculatedHexBuffer,
-    matchedType: matchedType || "none",
-    message: verificationPassed
-      ? `✅ Verification Passed (Matched using ${matchedType} mode)`
-      : "❌ Verification Failed - Server may have changed its seed or hash method mismatch",
-  };
-
-  res.json(result);
 });
 
 // Start server
-const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`Fair Game Verifier API running on port ${PORT}`);
 });
