@@ -1,145 +1,40 @@
-// server.js
-require('dotenv').config();
 const express = require('express');
+const mongoose = require('mongoose');
 const cors = require('cors');
-const helmet = require('helmet');
-const mongoSanitize = require('express-mongo-sanitize');
-const xss = require('xss-clean');
-const hpp = require('hpp');
-const compression = require('compression');
-const morgan = require('morgan');
-const connectDB = require('./config/database');
+const rateLimit = require('express-rate-limit');
+require('dotenv').config();
 
-// Initialize express app
+const userAuthRoutes = require('./routes/user/auth');
+
 const app = express();
 
-// Connect to MongoDB Atlas
-connectDB();
-
-// Security middleware
-app.use(helmet({
-  contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false,
-}));
-
-// CORS configuration
-app.use(cors({
-  origin: function(origin, callback) {
-    const allowedOrigins = process.env.FRONTEND_URL.split(',');
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
-      callback(null, true);
-    } else {
-      callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-device-id']
-}));
-
-// Body parser middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// Security middleware
-app.use(mongoSanitize()); // Prevent MongoDB injection
-app.use(xss()); // Clean user input from malicious HTML
-app.use(hpp()); // Prevent HTTP parameter pollution
-
-// Compression middleware
-app.use(compression());
-
-// Logging middleware
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
-} else {
-  app.use(morgan('combined'));
-}
-
-// Request timestamp
-app.use((req, res, next) => {
-  req.requestTime = new Date().toISOString();
-  next();
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.'
 });
 
-// Trust proxy
-app.set('trust proxy', 1);
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(limiter);
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+});
 
 // Routes
-require('./routes')(app);
+app.use('/api/user/auth', userAuthRoutes);
 
-// Global error handler
-app.use((err, req, res, next) => {
-  console.error('Error:', err);
-  
-  // Mongoose validation error
-  if (err.name === 'ValidationError') {
-    const errors = Object.values(err.errors).map(e => e.message);
-    return res.status(400).json({
-      success: false,
-      message: 'Validation Error',
-      errors
-    });
-  }
-  
-  // JWT errors
-  if (err.name === 'JsonWebTokenError') {
-    return res.status(401).json({
-      success: false,
-      message: 'Invalid token'
-    });
-  }
-  
-  // MongoDB duplicate key error
-  if (err.code === 11000) {
-    const field = Object.keys(err.keyValue)[0];
-    return res.status(400).json({
-      success: false,
-      message: `${field} already exists`
-    });
-  }
-  
-  // Default error
-  res.status(err.status || 500).json({
-    success: false,
-    message: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
-});
+// Database connection
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+})
+.then(() => console.log('Connected to MongoDB'))
+.catch(err => console.error('MongoDB connection error:', err));
 
-// Start server
 const PORT = process.env.PORT || 5000;
-const server = app.listen(PORT, () => {
-  console.log(`
-    ╔════════════════════════════════════════╗
-    ║                                        ║
-    ║     🎰 sBucks Server Started! 🎰      ║
-    ║                                        ║
-    ║     Mode: ${process.env.NODE_ENV.padEnd(25)}║
-    ║     Port: ${PORT}                     ║
-    ║                                        ║
-    ╚════════════════════════════════════════╝
-  `);
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err, promise) => {
-  console.error('Unhandled Rejection:', err);
-  // Close server & exit process
-  server.close(() => process.exit(1));
-});
-
-// Handle uncaught exceptions
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
-  // Close server & exit process
-  server.close(() => process.exit(1));
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received. Shutting down gracefully...');
-  server.close(() => {
-    console.log('Process terminated');
-  });
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
