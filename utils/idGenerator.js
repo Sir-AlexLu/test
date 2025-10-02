@@ -1,9 +1,9 @@
 const crypto = require('crypto');
 
 const generateUserId = () => {
-  const timestamp = Date.now().toString();
-  const randomChars = crypto.randomBytes(3).toString('hex');
-  return `USR${timestamp}${randomChars.toUpperCase()}`;
+  // Generate 8 unique alphanumeric characters
+  const randomChars = crypto.randomBytes(4).toString('hex').toUpperCase();
+  return `sB${randomChars}`;
 };
 
 const generateReferralCode = () => {
@@ -12,10 +12,27 @@ const generateReferralCode = () => {
     letters.charAt(Math.floor(Math.random() * letters.length))
   ).join('');
   const randomNumbers = Math.floor(1000 + Math.random() * 9000);
-  return `REFL${randomLetters}${randomNumbers}`;
+  return `sB${randomLetters}${randomNumbers}`;
+};
+
+const generateTransactionId = (type) => {
+  const prefix = type === 'deposit' ? 'DIN' : 
+                 type === 'withdrawal' ? 'WOT' : 
+                 type === 'bonus' ? 'BNS' : 'SYS';
+  
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const randomChars = crypto.randomBytes(2).toString('hex');
+  return `sB${prefix}${date}${randomChars}`;
+};
+
+const generateBetId = () => {
+  const randomChars = crypto.randomBytes(6).toString('hex').toUpperCase();
+  return `sB${randomChars}`;
 };
 
 module.exports = {
   generateUserId,
-  generateReferralCode
+  generateReferralCode,
+  generateTransactionId,
+  generateBetId
 };
