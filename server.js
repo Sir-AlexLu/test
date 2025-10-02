@@ -8,7 +8,7 @@ const xss = require('xss-clean');
 const hpp = require('hpp');
 const compression = require('compression');
 const morgan = require('morgan');
-const connectDB = require('./config/database');
+const connectDB = require('/config/database');
 
 // Initialize express app
 const app = express();
