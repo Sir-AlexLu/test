@@ -1,10 +1,10 @@
 // controllers.js
-const User = require('./models/User');
-const Transaction = require('./models/Transaction');
-const Bet = require('./models/Bet');
-const Referral = require('./models/Referral');
-const Reward = require('./models/Reward');
-const PromoCode = require('./models/PromoCode');
+const User = require('/models/User');
+const Transaction = require('/models/Transaction');
+const Bet = require('/models/Bet');
+const Referral = require('/models/Referral');
+const Reward = require('/models/Reward');
+const PromoCode = require('/models/PromoCode');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
