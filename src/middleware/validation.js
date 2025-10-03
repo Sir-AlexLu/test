@@ -5,7 +5,10 @@ const User = require('../models/User');
 const handleValidationErrors = (req, res, next) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
+    return res.status(400).json({ 
+      success: false,
+      errors: errors.array() 
+    });
   }
   next();
 };
@@ -78,4 +81,27 @@ const validateLogin = [
   handleValidationErrors
 ];
 
-module.exports = { validateRegister, validateLogin };
+const validateBankDetails = [
+  body('accountNumber')
+    .notEmpty()
+    .withMessage('Account number is required')
+    .isNumeric()
+    .withMessage('Account number must contain only numbers'),
+  body('holderName')
+    .notEmpty()
+    .withMessage('Account holder name is required')
+    .isAlpha('en-US', {ignore: ' '})
+    .withMessage('Account holder name must contain only letters'),
+  body('ifscCode')
+    .notEmpty()
+    .withMessage('IFSC code is required')
+    .matches(/^[A-Z]{4}0[A-Z0-9]{6}$/)
+    .withMessage('Please enter a valid IFSC code'),
+  body('upi')
+    .optional()
+    .matches(/^[a-zA-Z0-9._-]+@[a-zA-Z]{3,}$/)
+    .withMessage('Please enter a valid UPI ID'),
+  handleValidationErrors
+];
+
+module.exports = { validateRegister, validateLogin, validateBankDetails };
