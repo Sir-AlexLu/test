@@ -16,6 +16,10 @@ const bankSchema = new mongoose.Schema({
   ifscCode: {
     type: String,
     required: true
+  },
+  upi: {
+    type: String,
+    required: false
   }
 }, { _id: false });
 
@@ -31,6 +35,26 @@ const loginHistorySchema = new mongoose.Schema({
   loginTime: {
     type: Date,
     default: Date.now
+  }
+}, { _id: false });
+
+const kycSchema = new mongoose.Schema({
+  status: {
+    type: String,
+    enum: ['pending', 'verified', 'rejected'],
+    default: 'pending'
+  },
+  documents: [{
+    type: String, // URLs to stored documents
+    required: false
+  }],
+  verifiedAt: {
+    type: Date,
+    required: false
+  },
+  rejectionReason: {
+    type: String,
+    required: false
   }
 }, { _id: false });
 
@@ -131,15 +155,26 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  deviceId: {
-    type: String,
-    required: true,
-    unique: true
+  lastLogin: {
+    ipAddress: {
+      type: String,
+      required: true
+    },
+    deviceInfo: {
+      type: String,
+      required: true
+    },
+    deviceId: {
+      type: String,
+      required: true,
+      unique: true
+    },
+    loginTime: {
+      type: Date,
+      default: Date.now
+    }
   },
-  ipAddress: {
-    type: String,
-    required: true
-  },
+  loginHistory: [loginHistorySchema],
   wallet: {
     type: walletSchema,
     default: () => ({})
@@ -148,10 +183,9 @@ const userSchema = new mongoose.Schema({
     type: bankSchema,
     default: null
   },
-  kycStatus: {
-    type: String,
-    enum: ['pending', 'verified', 'rejected'],
-    default: 'pending'
+  kyc: {
+    type: kycSchema,
+    default: () => ({})
   },
   vipLevel: {
     type: Number,
@@ -165,18 +199,9 @@ const userSchema = new mongoose.Schema({
     default: 'active'
   },
   monthlyBonusGiven: {
-    type: Number,
-    default: 0
+    type: Boolean,
+    default: false
   },
-  lastLogin: {
-    ipAddress: String,
-    deviceInfo: String,
-    loginTime: {
-      type: Date,
-      default: Date.now
-    }
-  },
-  loginHistory: [loginHistorySchema],
   registeredAt: {
     type: Date,
     default: Date.now
@@ -214,25 +239,52 @@ userSchema.methods.compareWithdrawalPin = async function(candidatePin) {
 };
 
 // Update login history
-userSchema.methods.updateLoginHistory = function(ipAddress, deviceInfo) {
+userSchema.methods.updateLoginHistory = function(ipAddress, deviceInfo, deviceId) {
+  // Update last login
   this.lastLogin = {
     ipAddress,
     deviceInfo,
+    deviceId,
     loginTime: new Date()
   };
   
+  // Add to login history
   this.loginHistory.push({
     ipAddress,
     deviceInfo,
     loginTime: new Date()
   });
   
-  // Keep only last 10 login records
-  if (this.loginHistory.length > 10) {
-    this.loginHistory = this.loginHistory.slice(-10);
+  // Keep only last 5 login records
+  if (this.loginHistory.length > 5) {
+    this.loginHistory = this.loginHistory.slice(-5);
   }
   
   return this.save();
+};
+
+// Check if bank details already exist
+userSchema.statics.isBankUnique = async function(accountNumber, ifscCode, upi) {
+  const existingUser = await this.findOne({
+    'bank.accountNumber': accountNumber,
+    'bank.ifscCode': ifscCode
+  });
+  
+  if (existingUser) {
+    return false;
+  }
+  
+  if (upi) {
+    const existingUpiUser = await this.findOne({
+      'bank.upi': upi
+    });
+    
+    if (existingUpiUser) {
+      return false;
+    }
+  }
+  
+  return true;
 };
 
 const User = mongoose.model('User', userSchema);
