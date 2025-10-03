@@ -9,8 +9,9 @@ const register = async (req, res) => {
   try {
     const { username, phoneNumber, email, password, withdrawalPin, referredBy } = req.body;
     
-    // Get client IP
+    // Get client IP and device info
     const ipAddress = getClientIp(req);
+    const deviceInfo = req.headers['user-agent'] || 'Unknown';
     
     // Generate device ID
     const deviceId = generateDeviceId();
@@ -23,8 +24,11 @@ const register = async (req, res) => {
       password,
       withdrawalPin,
       referredBy,
-      ipAddress,
-      deviceId
+      lastLogin: {
+        ipAddress,
+        deviceInfo,
+        deviceId
+      }
     });
     
     // Generate token
@@ -41,16 +45,30 @@ const register = async (req, res) => {
         email: user.email,
         phoneNumber: user.phoneNumber,
         referCode: user.referCode,
-        deviceId: user.deviceId,
+        lastLogin: user.lastLogin,
         wallet: user.wallet,
-        kycStatus: user.kycStatus,
+        kyc: user.kyc,
         vipLevel: user.vipLevel,
         status: user.status
       }
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    
+    // Handle duplicate key errors
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyValue)[0];
+      return res.status(400).json({ 
+        success: false,
+        message: `${field} already exists` 
+      });
+    }
+    
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error', 
+      error: error.message 
+    });
   }
 };
 
@@ -73,22 +91,31 @@ const login = async (req, res) => {
     });
     
     if (!user) {
-      return res.status(401).json({ message: 'Invalid credentials' });
+      return res.status(401).json({ 
+        success: false,
+        message: 'Invalid credentials' 
+      });
     }
     
     // Check if account is active
     if (user.status !== 'active') {
-      return res.status(401).json({ message: `Account is ${user.status}` });
+      return res.status(401).json({ 
+        success: false,
+        message: `Account is ${user.status}` 
+      });
     }
     
     // Check password
     const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
-      return res.status(401).json({ message: 'Invalid credentials' });
+      return res.status(401).json({ 
+        success: false,
+        message: 'Invalid credentials' 
+      });
     }
     
     // Update login history
-    await user.updateLoginHistory(ipAddress, deviceInfo);
+    await user.updateLoginHistory(ipAddress, deviceInfo, user.lastLogin.deviceId);
     
     // Generate token
     const token = generateToken(user._id);
@@ -104,17 +131,20 @@ const login = async (req, res) => {
         email: user.email,
         phoneNumber: user.phoneNumber,
         referCode: user.referCode,
-        deviceId: user.deviceId,
+        lastLogin: user.lastLogin,
         wallet: user.wallet,
-        kycStatus: user.kycStatus,
+        kyc: user.kyc,
         vipLevel: user.vipLevel,
-        status: user.status,
-        lastLogin: user.lastLogin
+        status: user.status
       }
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error', 
+      error: error.message 
+    });
   }
 };
 
@@ -133,30 +163,80 @@ const getProfile = async (req, res) => {
         phoneNumber: user.phoneNumber,
         referCode: user.referCode,
         referredBy: user.referredBy,
+        lastLogin: user.lastLogin,
+        loginHistory: user.loginHistory,
         wallet: user.wallet,
         bank: user.bank,
-        kycStatus: user.kycStatus,
+        kyc: user.kyc,
         vipLevel: user.vipLevel,
         status: user.status,
         monthlyBonusGiven: user.monthlyBonusGiven,
-        lastLogin: user.lastLogin,
         registeredAt: user.registeredAt
       }
     });
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error', 
+      error: error.message 
+    });
+  }
+};
+
+// Add bank details
+const addBankDetails = async (req, res) => {
+  try {
+    const { accountNumber, holderName, ifscCode, upi } = req.body;
+    
+    // Check if bank details are unique
+    const isUnique = await User.isBankUnique(accountNumber, ifscCode, upi);
+    if (!isUnique) {
+      return res.status(400).json({
+        success: false,
+        message: 'Bank details already associated with another account'
+      });
+    }
+    
+    const user = await User.findById(req.user.id);
+    
+    // Update bank details
+    user.bank = {
+      accountNumber,
+      holderName,
+      ifscCode,
+      upi
+    };
+    
+    await user.save();
+    
+    res.status(200).json({
+      success: true,
+      message: 'Bank details added successfully',
+      bank: user.bank
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Server error', 
+      error: error.message 
+    });
   }
 };
 
 // Logout user (client-side token removal)
 const logout = async (req, res) => {
-  res.status(200).json({ success: true, message: 'Logged out successfully' });
+  res.status(200).json({ 
+    success: true, 
+    message: 'Logged out successfully' 
+  });
 };
 
 module.exports = {
   register,
   login,
   getProfile,
+  addBankDetails,
   logout
 };
