@@ -15,39 +15,61 @@ let db;
 const client = new MongoClient(process.env.MONGODB_URI);
 
 async function connectDB() {
-  await client.connect();
-  db = client.db("brevo-test");
-  console.log("✅ MongoDB connected");
+  try {
+    await client.connect();
+    db = client.db("brevo-test");
+    console.log("✅ MongoDB connected");
+  } catch (error) {
+    console.error("❌ MongoDB connection failed:", error.message);
+    process.exit(1);
+  }
 }
 
-// ==================== Brevo HTTP API ====================
+// ==================== Brevo HTTP API (with debugging) ====================
 async function sendBrevoEmail({ to, subject, htmlContent }) {
-  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-    method: "POST",
-    headers: {
-      "accept": "application/json",
-      "api-key": process.env.BREVO_API_KEY,
-      "content-type": "application/json"
+  console.log("📤 Attempting to send email...");
+  console.log("   To:", to);
+  console.log("   From:", process.env.SENDER_EMAIL);
+  console.log("   Subject:", subject);
+
+  const payload = {
+    sender: {
+      name: process.env.SENDER_NAME,
+      email: process.env.SENDER_EMAIL
     },
-    body: JSON.stringify({
-      sender: {
-        name: process.env.SENDER_NAME,
-        email: process.env.SENDER_EMAIL
+    to: [{ email: to }],
+    subject: subject,
+    htmlContent: htmlContent
+  };
+
+  try {
+    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+      method: "POST",
+      headers: {
+        "accept": "application/json",
+        "api-key": process.env.BREVO_API_KEY,
+        "content-type": "application/json"
       },
-      to: [{ email: to }],
-      subject: subject,
-      htmlContent: htmlContent
-    })
-  });
+      body: JSON.stringify(payload)
+    });
 
-  const data = await response.json();
+    const data = await response.json();
 
-  if (!response.ok) {
-    console.error("Brevo Error:", data);
-    throw new Error(data.message || "Failed to send email");
+    console.log("📨 Brevo Response Status:", response.status);
+    console.log("📨 Brevo Response:", JSON.stringify(data, null, 2));
+
+    if (!response.ok) {
+      console.error("❌ Brevo API Error:", data);
+      throw new Error(data.message || `Brevo API error: ${response.status}`);
+    }
+
+    console.log("✅ Email sent! MessageId:", data.messageId);
+    return data;
+
+  } catch (error) {
+    console.error("❌ Send email failed:", error.message);
+    throw error;
   }
-
-  return data;
 }
 
 // ==================== OTP Generator ====================
@@ -121,53 +143,142 @@ const emailTemplate = (otp, type) => {
   `;
 };
 
-// ==================== ROUTES ====================
+// ==================== DEBUG ROUTES ====================
 
 // Health Check
+app.get("/", (req, res) => {
+  res.json({ 
+    status: "ok", 
+    service: "sBucks Brevo Test",
+    timestamp: new Date().toISOString() 
+  });
+});
+
 app.get("/health", (req, res) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
 });
 
-// Test Brevo Connection
-app.get("/test-brevo", async (req, res) => {
+// Check Brevo Account & Senders
+app.get("/check-brevo", async (req, res) => {
   try {
-    const response = await fetch("https://api.brevo.com/v3/account", {
-      headers: {
-        "api-key": process.env.BREVO_API_KEY
-      }
+    console.log("🔍 Checking Brevo configuration...");
+    
+    // Check account
+    const accountRes = await fetch("https://api.brevo.com/v3/account", {
+      headers: { "api-key": process.env.BREVO_API_KEY }
     });
-    const data = await response.json();
-    res.json({ success: true, account: data });
+    const account = await accountRes.json();
+    
+    // Check senders
+    const sendersRes = await fetch("https://api.brevo.com/v3/senders", {
+      headers: { "api-key": process.env.BREVO_API_KEY }
+    });
+    const senders = await sendersRes.json();
+    
+    // Check if configured sender is verified
+    const configuredSender = process.env.SENDER_EMAIL;
+    const senderList = senders.senders || [];
+    const senderVerified = senderList.find(s => s.email === configuredSender);
+    
+    console.log("📧 Account:", account.email);
+    console.log("📧 Configured Sender:", configuredSender);
+    console.log("📧 Sender Verified:", senderVerified ? "YES ✅" : "NO ❌");
+    
+    res.json({
+      success: accountRes.ok,
+      account: {
+        email: account.email,
+        firstName: account.firstName,
+        lastName: account.lastName,
+        plan: account.plan
+      },
+      senders: senderList.map(s => ({
+        email: s.email,
+        name: s.name,
+        active: s.active
+      })),
+      config: {
+        SENDER_EMAIL: configuredSender,
+        SENDER_NAME: process.env.SENDER_NAME,
+        senderIsVerified: !!senderVerified
+      },
+      warning: !senderVerified ? "⚠️ SENDER_EMAIL is not verified in Brevo!" : null
+    });
+    
   } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    console.error("❌ Check Brevo failed:", error.message);
+    res.status(500).json({ 
+      success: false, 
+      error: error.message,
+      hint: "Check if BREVO_API_KEY is correct"
+    });
   }
 });
 
-// ========== 1. REGISTER (Email + Password + Send OTP) ==========
+// Test Send Email
+app.post("/test-email", async (req, res) => {
+  const { email } = req.body;
+
+  if (!email) {
+    return res.status(400).json({ success: false, message: "Email required" });
+  }
+
+  try {
+    const result = await sendBrevoEmail({
+      to: email,
+      subject: "sBucks Test Email ✅",
+      htmlContent: `
+        <div style="font-family: Arial; padding: 30px; background: #0f172a; color: #fff;">
+          <h1 style="color: #22c55e;">Test Email Works! ✅</h1>
+          <p>If you see this, Brevo is configured correctly.</p>
+          <p style="color: #64748b;">Time: ${new Date().toISOString()}</p>
+        </div>
+      `
+    });
+
+    res.json({
+      success: true,
+      message: "Test email sent! Check your inbox.",
+      brevoResponse: result
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: error.message,
+      hint: "Check /check-brevo to verify your sender is configured"
+    });
+  }
+});
+
+// ==================== MAIN ROUTES ====================
+
+// 1. REGISTER (Email + Password + Send OTP)
 app.post("/register", async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    console.log("📝 Register attempt:", email);
+
     if (!email || !password) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Email and password are required" 
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required"
       });
     }
 
     if (password.length < 6) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Password must be at least 6 characters" 
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters"
       });
     }
 
     // Check existing verified user
     const existingUser = await db.collection("users").findOne({ email });
     if (existingUser) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Email already registered" 
+      return res.status(400).json({
+        success: false,
+        message: "Email already registered"
       });
     }
 
@@ -200,51 +311,56 @@ app.post("/register", async (req, res) => {
 
     console.log(`📧 Register OTP sent: ${email} | ${otp}`);
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: "Verification code sent to your email",
-      otpId 
+      otpId
     });
 
   } catch (error) {
-    console.error("Register error:", error);
-    res.status(500).json({ success: false, message: error.message });
+    console.error("❌ Register error:", error.message);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to send verification email. Please try again." 
+    });
   }
 });
 
-// ========== 2. VERIFY REGISTRATION OTP ==========
+// 2. VERIFY REGISTRATION OTP
 app.post("/verify-register", async (req, res) => {
   try {
     const { email, otp } = req.body;
 
+    console.log("🔐 Verify attempt:", email, "OTP:", otp);
+
     if (!email || !otp) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Email and OTP are required" 
+      return res.status(400).json({
+        success: false,
+        message: "Email and OTP are required"
       });
     }
 
     const pending = await db.collection("pending_users").findOne({ email });
 
     if (!pending) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "No pending registration found" 
+      return res.status(400).json({
+        success: false,
+        message: "No pending registration found"
       });
     }
 
     if (new Date() > pending.expiresAt) {
       await db.collection("pending_users").deleteOne({ email });
-      return res.status(400).json({ 
-        success: false, 
-        message: "Code expired. Please register again" 
+      return res.status(400).json({
+        success: false,
+        message: "Code expired. Please register again"
       });
     }
 
     if (pending.otp !== otp) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid verification code" 
+      return res.status(400).json({
+        success: false,
+        message: "Invalid verification code"
       });
     }
 
@@ -262,34 +378,36 @@ app.post("/verify-register", async (req, res) => {
 
     console.log(`✅ User registered: ${email}`);
 
-    res.json({ 
-      success: true, 
-      message: "Account created successfully!" 
+    res.json({
+      success: true,
+      message: "Account created successfully!"
     });
 
   } catch (error) {
-    console.error("Verify error:", error);
+    console.error("❌ Verify error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
-// ========== 3. FORGOT PASSWORD (Send OTP) ==========
+// 3. FORGOT PASSWORD (Send OTP)
 app.post("/forgot-password", async (req, res) => {
   try {
     const { email } = req.body;
 
+    console.log("🔑 Forgot password:", email);
+
     if (!email) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Email is required" 
+      return res.status(400).json({
+        success: false,
+        message: "Email is required"
       });
     }
 
     const user = await db.collection("users").findOne({ email });
     if (!user) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "No account found with this email" 
+      return res.status(400).json({
+        success: false,
+        message: "No account found with this email"
       });
     }
 
@@ -313,58 +431,63 @@ app.post("/forgot-password", async (req, res) => {
 
     console.log(`📧 Reset OTP sent: ${email} | ${otp}`);
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: "Reset code sent to your email",
-      otpId 
+      otpId
     });
 
   } catch (error) {
-    console.error("Forgot password error:", error);
-    res.status(500).json({ success: false, message: error.message });
+    console.error("❌ Forgot password error:", error.message);
+    res.status(500).json({ 
+      success: false, 
+      message: "Failed to send reset email. Please try again." 
+    });
   }
 });
 
-// ========== 4. RESET PASSWORD (Verify + Update) ==========
+// 4. RESET PASSWORD (Verify + Update)
 app.post("/reset-password", async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
 
+    console.log("🔐 Reset password attempt:", email);
+
     if (!email || !otp || !newPassword) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "All fields are required" 
+      return res.status(400).json({
+        success: false,
+        message: "All fields are required"
       });
     }
 
     if (newPassword.length < 6) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Password must be at least 6 characters" 
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 6 characters"
       });
     }
 
     const reset = await db.collection("password_resets").findOne({ email });
 
     if (!reset) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "No reset request found" 
+      return res.status(400).json({
+        success: false,
+        message: "No reset request found"
       });
     }
 
     if (new Date() > reset.expiresAt) {
       await db.collection("password_resets").deleteOne({ email });
-      return res.status(400).json({ 
-        success: false, 
-        message: "Code expired. Please try again" 
+      return res.status(400).json({
+        success: false,
+        message: "Code expired. Please try again"
       });
     }
 
     if (reset.otp !== otp) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Invalid reset code" 
+      return res.status(400).json({
+        success: false,
+        message: "Invalid reset code"
       });
     }
 
@@ -379,20 +502,26 @@ app.post("/reset-password", async (req, res) => {
 
     console.log(`✅ Password reset: ${email}`);
 
-    res.json({ 
-      success: true, 
-      message: "Password updated successfully!" 
+    res.json({
+      success: true,
+      message: "Password updated successfully!"
     });
 
   } catch (error) {
-    console.error("Reset password error:", error);
+    console.error("❌ Reset password error:", error.message);
     res.status(500).json({ success: false, message: error.message });
   }
 });
 
 // ==================== Start Server ====================
 connectDB().then(() => {
-  app.listen(process.env.PORT, () => {
-    console.log(`🚀 Server running: https://sbucks.onrender.com`);
+  const PORT = process.env.PORT || 5000;
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running: http://localhost:${PORT}`);
+    console.log(`📧 Sender: ${process.env.SENDER_EMAIL}`);
+    console.log("");
+    console.log("Debug endpoints:");
+    console.log(`   GET  /check-brevo  - Verify Brevo config`);
+    console.log(`   POST /test-email   - Send test email`);
   });
 });
